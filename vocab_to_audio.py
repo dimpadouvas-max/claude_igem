@@ -1,15 +1,19 @@
 import argparse
+import asyncio
 import json
 import sys
 import tempfile
 import os
 import shutil
 import subprocess
-from gtts import gTTS
+import edge_tts
+
+EN_VOICE = "en-GB-SoniaNeural"
+EL_VOICE = "el-GR-AthinaNeural"
 
 
-def tts_clip(text, lang, outpath):
-    gTTS(text=text, lang=lang).save(outpath)
+async def tts_clip(text, voice, outpath):
+    await edge_tts.Communicate(text, voice).save(outpath)
 
 
 def silence_clip(duration_ms, outpath):
@@ -21,7 +25,7 @@ def silence_clip(duration_ms, outpath):
     ], check=True, capture_output=True)
 
 
-def build_track(entries, output_path):
+async def build_track(entries, output_path):
     tmpdir = tempfile.mkdtemp(prefix="vocab_audio_")
     clips = []
 
@@ -35,30 +39,32 @@ def build_track(entries, output_path):
     for i, entry in enumerate(entries):
         code_and_term = f"{entry['code']}. {entry['term']}"
         p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-        tts_clip(code_and_term, "en", p)
+        await tts_clip(code_and_term, EN_VOICE, p)
         clips += [p, short_silence]
         clip_idx += 1
 
         if entry.get("english_meaning"):
             p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-            tts_clip(entry["english_meaning"], "en", p)
+            await tts_clip(entry["english_meaning"], EN_VOICE, p)
             clips += [p, short_silence]
             clip_idx += 1
 
         if entry.get("greek_meaning"):
             p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-            tts_clip(entry["greek_meaning"], "el", p)
+            await tts_clip(entry["greek_meaning"], EL_VOICE, p)
             clips += [p, short_silence]
             clip_idx += 1
 
         if entry.get("example"):
             p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-            tts_clip(entry["example"], "en", p)
+            await tts_clip(entry["example"], EN_VOICE, p)
             clips.append(p)
             clip_idx += 1
 
         if i < len(entries) - 1:
             clips.append(long_silence)
+
+        print(f"  [{i+1}/{len(entries)}] {entry['code']} done")
 
     concat_file = os.path.join(tmpdir, "concat.txt")
     with open(concat_file, "w", encoding="utf-8") as f:
@@ -94,7 +100,7 @@ def main():
     output_path = args.output or f"{page_number}.mp4"
 
     print(f"Processing {len(entries)} entries from page {page_number}...")
-    build_track(entries, output_path)
+    asyncio.run(build_track(entries, output_path))
     print(f"Saved: {output_path}")
 
 
