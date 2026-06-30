@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import re
 import sys
 import tempfile
 import os
@@ -10,6 +11,24 @@ import edge_tts
 
 EN_VOICE = "en-GB-SoniaNeural"
 EL_VOICE = "el-GR-AthinaNeural"
+
+EN_REPLACEMENTS = [
+    (r'\bsb\b',   'somebody'),
+    (r'\bsth\b',  'something'),
+    (r'\besp\.',  'especially'),
+]
+
+EL_REPLACEMENTS = [
+    (r'\bκτ\b',   'κάτι'),
+    (r'\bκπ\b',   'κάποιον'),
+    (r'\bκλπ\b',  'και τα λοίπα'),
+]
+
+
+def preprocess(text, replacements, flags=0):
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=flags)
+    return text
 
 
 async def tts_clip(text, voice, outpath):
@@ -30,43 +49,45 @@ async def build_track(pages, output_path):
     clips = []
 
     short_silence = os.path.join(tmpdir, "pause_short.mp3")
-    long_silence = os.path.join(tmpdir, "pause_long.mp3")
-    page_pause = os.path.join(tmpdir, "pause_page.mp3")
-    silence_clip(600, short_silence)
+    long_silence  = os.path.join(tmpdir, "pause_long.mp3")
+    page_pause    = os.path.join(tmpdir, "pause_page.mp3")
+    silence_clip(600,  short_silence)
     silence_clip(1400, long_silence)
     silence_clip(2500, page_pause)
 
     clip_idx = 0
 
     for page_idx, (page_number, entries) in enumerate(pages):
-        # Page announcement
         p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
         await tts_clip(f"Move to page {page_number}.", EN_VOICE, p)
-        clips.append(p)
-        clips.append(page_pause)
+        clips += [p, page_pause]
         clip_idx += 1
 
         for i, entry in enumerate(entries):
+            term = preprocess(entry["term"], EN_REPLACEMENTS, flags=re.IGNORECASE)
             p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-            await tts_clip(entry["term"], EN_VOICE, p)
+            await tts_clip(term, EN_VOICE, p)
             clips += [p, short_silence]
             clip_idx += 1
 
             if entry.get("english_meaning"):
+                meaning_en = preprocess(entry["english_meaning"], EN_REPLACEMENTS, flags=re.IGNORECASE)
                 p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-                await tts_clip(entry["english_meaning"], EN_VOICE, p)
+                await tts_clip(meaning_en, EN_VOICE, p)
                 clips += [p, short_silence]
                 clip_idx += 1
 
             if entry.get("greek_meaning"):
+                meaning_el = preprocess(entry["greek_meaning"], EL_REPLACEMENTS)
                 p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-                await tts_clip(entry["greek_meaning"], EL_VOICE, p)
+                await tts_clip(meaning_el, EL_VOICE, p)
                 clips += [p, short_silence]
                 clip_idx += 1
 
             if entry.get("example"):
+                example = preprocess(entry["example"], EN_REPLACEMENTS, flags=re.IGNORECASE)
                 p = os.path.join(tmpdir, f"clip_{clip_idx:04d}.mp3")
-                await tts_clip(entry["example"], EN_VOICE, p)
+                await tts_clip(example, EN_VOICE, p)
                 clips.append(p)
                 clip_idx += 1
 
@@ -86,7 +107,7 @@ async def build_track(pages, output_path):
     subprocess.run([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
         "-i", concat_file,
-        "-c:a", "aac", "-b:a", "128k",
+        "-c:a", "libmp3lame", "-b:a", "128k",
         output_path
     ], check=True)
 
@@ -96,7 +117,7 @@ async def build_track(pages, output_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, nargs="+", help="One or more JSON files (one per page)")
-    parser.add_argument("--output", default=None, help="Output .mp4 filename")
+    parser.add_argument("--output", default=None, help="Output .mp3 filename")
     args = parser.parse_args()
 
     pages = []
@@ -119,9 +140,9 @@ def main():
     if args.output:
         output_path = args.output
     elif len(pages) == 1:
-        output_path = f"{pages[0][0]}.mp4"
+        output_path = f"{pages[0][0]}.mp3"
     else:
-        output_path = f"{pages[0][0]}-{pages[-1][0]}.mp4"
+        output_path = f"{pages[0][0]}-{pages[-1][0]}.mp3"
 
     print(f"Processing {total_entries} entries across {len(pages)} page(s)...")
     asyncio.run(build_track(pages, output_path))
